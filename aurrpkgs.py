@@ -102,7 +102,7 @@ for i in range(len(pkglist)):
     pkglist[i]["Version"] = pkglist[i]["Version"].split('-', 1)[0]
 
     # non-CRAN repositories are not supported yet
-    if "{uri.netloc}".format(uri = urlparse(pkglist[i]["URL"])) != CRAN_domain:
+    if "{uri.netloc}".format(uri = urlparse(pkglist[i]["URL"])).lower() != CRAN_domain:
         print("Skipping non-CRAN package", pkglist[i]["Name"])
         continue
 
