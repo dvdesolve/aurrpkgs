@@ -7,6 +7,6 @@ You should have working Python of version 3.2 or newer installed on your system.
 ## Usage
 Simply run:
 ```
-aurrpkgs.py user
+./aurrpkgs.py user
 ```
 where `user` is AUR username of interest.
