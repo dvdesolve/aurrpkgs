@@ -10,3 +10,6 @@ Simply run:
 ./aurrpkgs.py user
 ```
 where `user` is AUR username of interest.
+
+## Limitations
+As for now `aurrpkgs` doesn't support repositories other than CRAN. This will be fixed soon.

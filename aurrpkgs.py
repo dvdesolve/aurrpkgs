@@ -5,7 +5,7 @@ import json
 import re
 import sys
 from urllib.error import URLError, HTTPError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import urlopen
 
 
@@ -21,7 +21,7 @@ class APIResponseError(Exception):
         self.reason = reason
 
 # handle unsuccessful CRAN searches
-class CRANSearchError(Exception):
+class RepoSearchError(Exception):
     def __init__(self, reason):
         self.reason = reason
 
@@ -31,17 +31,19 @@ ERR_request = 1
 ERR_api_response = 2
 ERR_server = 3
 ERR_network = 4
-ERR_cran = 5
 
 
 # some defaults
 API_url = "https://aur.archlinux.org/rpc/"
 API_version = 5
+CRAN_domain = "cran.r-project.org"
+script_version = "0.1.0"
 
 
 # get command line options
 parser = argparse.ArgumentParser(description = "Tool for easy management of AUR R packages")
 parser.add_argument("user", help = "AUR username")
+parser.add_argument("--version", action = "version", version = "%(prog)s " + script_version)
 cmdline_args = vars(parser.parse_args())
 
 username = cmdline_args["user"]
@@ -99,7 +101,12 @@ for i in range(len(pkglist)):
     # strip '-pkgrel'
     pkglist[i]["Version"] = pkglist[i]["Version"].split('-', 1)[0]
 
-    # get version info from CRAN
+    # non-CRAN repositories are not supported yet
+    if "{uri.netloc}".format(uri = urlparse(pkglist[i]["URL"])) != CRAN_domain:
+        print("Skipping non-CRAN package", pkglist[i]["Name"])
+        continue
+
+    # get version info from repository
     try:
         with urlopen(pkglist[i]["URL"]) as response:
             html = response.read().decode("utf-8")
@@ -112,34 +119,38 @@ for i in range(len(pkglist)):
                 version_match = version_pattern.search(html)
 
                 if version_match:
-                    pkglist[i]["CRANVer"] = version_match.group(1)
+                    pkglist[i]["RepoVer"] = version_match.group(1)
 
-                    # make CRANVersion to conform with Arch standards (https://wiki.archlinux.org/index.php/R_package_guidelines)
-                    pkglist[i]["CRANVersion"] = re.sub(r"[:-]", ".", pkglist[i]["CRANVer"])
+                    # make RepoVersion to conform with Arch standards (https://wiki.archlinux.org/index.php/R_package_guidelines)
+                    pkglist[i]["RepoVersion"] = re.sub(r"[:-]", ".", pkglist[i]["RepoVer"])
                 else:
-                    raise CRANSearchError("can't find version info")
+                    raise RepoSearchError("can't find version info")
             else:
-                raise CRANSearchError("can't find summary table")
+                raise RepoSearchError("can't find package info")
 
     except HTTPError as err:
-        print("Something wrong with CRAN database request; server returned", err.code)
-        sys.exit(ERR_server)
+        print("Something wrong with repository request; server returned", err.code)
+        print("Skipping package", pkglist[i]["Name"])
+        continue
     except URLError as err:
-        print("Error while trying to connect:", err.reason)
-        sys.exit(ERR_network)
+        print("Error while trying to connect to repository:", err.reason)
+        print("Skipping package", pkglist[i]["Name"])
+        continue
     except RequestError as err:
-        print("Error while fetching request:", err.status, err.reason)
-        sys.exit(ERR_request)
-    except CRANSearchError as err:
-        print("Error while processing CRAN database:", err.reason)
-        sys.exit(ERR_cran)
+        print("Error while fetching request from repository:", err.status, err.reason)
+        print("Skipping package", pkglist[i]["Name"])
+        continue
+    except RepoSearchError as err:
+        print("Error while processing repository info for package " + pkglist[i]["Name"] + ":", err.reason)
+        print("Skipping package", pkglist[i]["Name"])
+        continue
 
     aurver = [int(x) for x in pkglist[i]["Version"].split(".")]
-    cranver = [int(x) for x in pkglist[i]["CRANVersion"].split(".")]
+    repover = [int(x) for x in pkglist[i]["RepoVersion"].split(".")]
 
-    if aurver < cranver:
+    if aurver < repover:
         all_updated = False
-        print("Package", pkglist[i]["Name"], "is outdated:", pkglist[i]["Version"], "(AUR) vs", pkglist[i]["CRANVer"], "(CRAN)")
+        print("Package", pkglist[i]["Name"], "is outdated:", pkglist[i]["Version"], "(AUR) vs", pkglist[i]["RepoVer"], "(" + pkglist[i]["URL"] + ")")
 
 
 # print summary if all is good
