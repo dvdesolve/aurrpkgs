@@ -36,8 +36,29 @@ ERR_network = 4
 # some defaults
 API_url = "https://aur.archlinux.org/rpc/"
 API_version = 5
-CRAN_domain = "cran.r-project.org"
-script_version = "0.1.0"
+
+supported_repos = [
+    {
+        "name": "CRAN",
+        "url": "cran.r-project.org",
+        "table_regex": "<table summary=\"Package(.*?) summary\">(.*?)</table>",
+        "table_match_index": 2,
+        "version_regex": "<tr>\n<td>Version:</td>\n<td>(.*?)</td>",
+        "version_match_index": 1
+    },
+
+    {
+        "name": "Bioconductor",
+        "url": "bioconductor.org",
+        "table_regex": "<table class=\"details\">(.*?)</table>",
+        "table_match_index": 1,
+        "version_regex": "<tr(.*?)>\n(\s*)<td>Version</td>\n(\s*)<td>(.*?)</td>",
+        "version_match_index": 4
+    }
+]
+
+script_version = "0.1.1"
+mandatory_keys = ["Name", "Version", "URL"]
 
 
 # get command line options
@@ -72,15 +93,19 @@ try:
 
         if response_json["resultcount"] == 0:
             raise APIResponseError("no R packages for user " + username + " were found in AUR")
+
 except HTTPError as err:
     print("Something wrong with AUR API request; server returned", err.code)
     sys.exit(ERR_server)
+
 except URLError as err:
     print("Error while trying to connect to the AUR:", err.reason)
     sys.exit(ERR_network)
+
 except RequestError as err:
     print("Error while fetching request:", err.status, err.reason)
     sys.exit(ERR_request)
+
 except APIResponseError as err:
     print("Error while processing API response:", err.reason)
     sys.exit(ERR_api_response)
@@ -92,7 +117,6 @@ pkglist = [i for i in response_json["results"] if i["Name"].startswith("r-")]
 
 # check for updates
 all_updated = True
-mandatory_keys = ["Name", "Version", "URL"]
 
 for i in range(len(pkglist)):
     # leave only necessary keys
@@ -101,25 +125,34 @@ for i in range(len(pkglist)):
     # strip '-pkgrel'
     pkglist[i]["Version"] = pkglist[i]["Version"].split('-', 1)[0]
 
-    # non-CRAN repositories are not supported yet
-    if "{uri.netloc}".format(uri = urlparse(pkglist[i]["URL"])).lower() != CRAN_domain:
-        print("Skipping non-CRAN package", pkglist[i]["Name"])
+    # some repositories are not supported yet
+    domain = "{uri.netloc}".format(uri = urlparse(pkglist[i]["URL"])).lower()
+
+    if not any(r["url"] == domain for r in supported_repos):
+        print("Skipping package", pkglist[i]["Name"], "from unsupported repository", domain)
         continue
+
+    repo = next(r for r in supported_repos if r["url"] == domain)
 
     # get version info from repository
     try:
         with urlopen(pkglist[i]["URL"]) as response:
             html = response.read().decode("utf-8")
-            table_pattern = re.compile(r"<table summary=\"Package(.*?) summary\">(.*?)</table>", flags = re.DOTALL)
+
+            table_regex = r"" + repo["table_regex"]
+            table_pattern = re.compile(table_regex, flags = re.DOTALL)
             table_match = table_pattern.search(html)
 
             if table_match:
-                html = table_match.group(2)
-                version_pattern = re.compile(r"<tr>\n<td>Version:</td>\n<td>(.*?)</td>\n</tr>", flags = re.DOTALL)
+                # recheck
+                html = table_match.group(repo["table_match_index"])
+
+                version_regex = r"" + repo["version_regex"]
+                version_pattern = re.compile(version_regex, flags = re.DOTALL)
                 version_match = version_pattern.search(html)
 
                 if version_match:
-                    pkglist[i]["RepoVer"] = version_match.group(1)
+                    pkglist[i]["RepoVer"] = version_match.group(repo["version_match_index"])
 
                     # make RepoVersion to conform with Arch standards (https://wiki.archlinux.org/index.php/R_package_guidelines)
                     pkglist[i]["RepoVersion"] = re.sub(r"[:-]", ".", pkglist[i]["RepoVer"])
@@ -129,20 +162,19 @@ for i in range(len(pkglist)):
                 raise RepoSearchError("can't find package info")
 
     except HTTPError as err:
-        print("Something wrong with repository request; server returned", err.code)
-        print("Skipping package", pkglist[i]["Name"])
+        print("Something wrong with repository request; server returned", str(err.code) + ".", "Skipping package", pkglist[i]["Name"])
         continue
+
     except URLError as err:
-        print("Error while trying to connect to repository:", err.reason)
-        print("Skipping package", pkglist[i]["Name"])
+        print("Error while trying to connect to repository:", err.reason + ".", "Skipping package", pkglist[i]["Name"])
         continue
+
     except RequestError as err:
-        print("Error while fetching request from repository:", err.status, err.reason)
-        print("Skipping package", pkglist[i]["Name"])
+        print("Error while fetching request from repository:", err.status, err.reason + ".", "Skipping package", pkglist[i]["Name"])
         continue
+
     except RepoSearchError as err:
-        print("Error while processing repository info for package " + pkglist[i]["Name"] + ":", err.reason)
-        print("Skipping package", pkglist[i]["Name"])
+        print("Error while processing repository info:", err.reason + ".", "Skipping package", pkglist[i]["Name"])
         continue
 
     aurver = [int(x) for x in pkglist[i]["Version"].split(".")]
