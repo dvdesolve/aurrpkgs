@@ -25,12 +25,28 @@ class RepoSearchError(Exception):
     def __init__(self, reason):
         self.reason = reason
 
-
 # error codes
-ERR_request = 1
-ERR_api_response = 2
-ERR_server = 3
-ERR_network = 4
+class aurrpkgsError:
+    request         = 1
+    api_response    = 2
+    server          = 3
+    network         = 4
+
+# color codes
+class aurrpkgsColor:
+    red     = "\033[1;31m"
+    green   = "\033[1;32m"
+    yellow  = "\033[1;33m"
+    blue    = "\033[1;34m"
+    purple  = "\033[1;35m"
+    nc      = "\033[0m"
+    error   = red
+    ok      = green
+    warn    = yellow
+    info    = purple
+    data    = blue
+    old     = red
+    new     = green
 
 
 # some defaults
@@ -57,7 +73,7 @@ supported_repos = [
     }
 ]
 
-script_version = "0.1.1"
+script_version = "0.1.2"
 mandatory_keys = ["Name", "Version", "URL"]
 
 
@@ -95,20 +111,20 @@ try:
             raise APIResponseError("no R packages for user " + username + " were found in AUR")
 
 except HTTPError as err:
-    print("Something wrong with AUR API request; server returned", err.code)
-    sys.exit(ERR_server)
+    print(aurrpkgsColor.error + "[ERROR]" + aurrpkgsColor.nc, "Something went wrong while doing AUR API request; server returned", aurrpkgsColor.data + str(err.code) + aurrpkgsColor.nc)
+    sys.exit(aurrpkgsError.server)
 
 except URLError as err:
-    print("Error while trying to connect to the AUR:", err.reason)
-    sys.exit(ERR_network)
+    print(aurrpkgsColor.error + "[ERROR]" + aurrpkgsColor.nc, "Error while trying to connect to the AUR:", aurrpkgsColor.data + str(err.reason) + aurrpkgsColor.nc)
+    sys.exit(aurrpkgsError.network)
 
 except RequestError as err:
-    print("Error while fetching request:", err.status, err.reason)
-    sys.exit(ERR_request)
+    print(aurrpkgsColor.error + "[ERROR]" + aurrpkgsColor.nc, "Error while fetching request data; server returned", aurrpkgsColor.data + str(err.status) + " " + str(err.reason) + aurrpkgsColor.nc)
+    sys.exit(aurrpkgsError.request)
 
 except APIResponseError as err:
-    print("Error while processing API response:", err.reason)
-    sys.exit(ERR_api_response)
+    print(aurrpkgsColor.error + "[ERROR]" + aurrpkgsColor.nc, "Error while processing AUR API response:", aurrpkgsColor.data + str(err.reason) + aurrpkgsColor.nc)
+    sys.exit(aurrpkgsError.api_response)
 
 
 # filter out any non-R packages
@@ -122,14 +138,14 @@ for i in range(len(pkglist)):
     # leave only necessary keys
     pkglist[i] = {k: v for k, v in pkglist[i].items() if k in mandatory_keys}
 
-    # strip '-pkgrel'
-    pkglist[i]["Version"] = pkglist[i]["Version"].split('-', 1)[0]
+    # strip '-pkgrel' and replace possible underscores
+    pkglist[i]["Version"] = re.sub(r"_", ".", pkglist[i]["Version"].split('-', 1)[0])
 
     # some repositories are not supported yet
     domain = "{uri.netloc}".format(uri = urlparse(pkglist[i]["URL"])).lower()
 
     if not any(r["url"] == domain for r in supported_repos):
-        print("Skipping package", pkglist[i]["Name"], "from unsupported repository", domain)
+        print(aurrpkgsColor.warn + "[WARN]" + aurrpkgsColor.nc, "Package", aurrpkgsColor.data + pkglist[i]["Name"] + aurrpkgsColor.nc + ":", "repository", aurrpkgsColor.data + domain + aurrpkgsColor.nc, "is unsupported. " + aurrpkgsColor.red + "Skipping" + aurrpkgsColor.nc)
         continue
 
     repo = next(r for r in supported_repos if r["url"] == domain)
@@ -162,19 +178,19 @@ for i in range(len(pkglist)):
                 raise RepoSearchError("can't find package info")
 
     except HTTPError as err:
-        print("Something wrong with repository request; server returned", str(err.code) + ".", "Skipping package", pkglist[i]["Name"])
+        print(aurrpkgsColor.warn + "[WARN]" + aurrpkgsColor.nc, "Package", aurrpkgsColor.data + pkglist[i]["Name"] + aurrpkgsColor.nc + ":", "something went wrong while doing repository request; server returned", aurrpkgsColor.data + str(err.code) + aurrpkgsColor.nc + ".", aurrpkgsColor.red + "Skipping" + aurrpkgsColor.nc)
         continue
 
     except URLError as err:
-        print("Error while trying to connect to repository:", err.reason + ".", "Skipping package", pkglist[i]["Name"])
+        print(aurrpkgsColor.warn + "[WARN]" + aurrpkgsColor.nc, "Package", aurrpkgsColor.data + pkglist[i]["Name"] + aurrpkgsColor.nc + ":", "error while trying to connect to repository:", aurrpkgsColor.data + str(err.reason) + aurrpkgsColor.nc + ".", aurrpkgsColor.red + "Skipping" + aurrpkgsColor.nc)
         continue
 
     except RequestError as err:
-        print("Error while fetching request from repository:", err.status, err.reason + ".", "Skipping package", pkglist[i]["Name"])
+        print(aurrpkgsColor.warn + "[WARN]" + aurrpkgsColor.nc, "Package", aurrpkgsColor.data + pkglist[i]["Name"] + aurrpkgsColor.nc + ":", "error while fetching request from repository:", aurrpkgsColor.data + str(err.status) + " " + str(err.reason) + aurrpkgsColor.nc + ".", aurrpkgsColor.red + "Skipping" + aurrpkgsColor.nc)
         continue
 
     except RepoSearchError as err:
-        print("Error while processing repository info:", err.reason + ".", "Skipping package", pkglist[i]["Name"])
+        print(aurrpkgsColor.warn + "[WARN]" + aurrpkgsColor.nc, "Package", aurrpkgsColor.data + pkglist[i]["Name"] + aurrpkgsColor.nc + ":", "error while processing repository info:", aurrpkgsColor.data + str(err.reason) + aurrpkgsColor.nc + ".", aurrpkgsColor.red + "Skipping" + aurrpkgsColor.nc)
         continue
 
     aurver = [int(x) for x in pkglist[i]["Version"].split(".")]
@@ -182,12 +198,12 @@ for i in range(len(pkglist)):
 
     if aurver < repover:
         all_updated = False
-        print("Package", pkglist[i]["Name"], "is outdated:", pkglist[i]["Version"], "(AUR) vs", pkglist[i]["RepoVer"], "(" + pkglist[i]["URL"] + ")")
+        print(aurrpkgsColor.info + "[INFO]" + aurrpkgsColor.nc, "Package", aurrpkgsColor.data + pkglist[i]["Name"] + aurrpkgsColor.nc, "is outdated:", aurrpkgsColor.old + pkglist[i]["Version"] + aurrpkgsColor.nc, "(AUR) vs", aurrpkgsColor.new + pkglist[i]["RepoVer"] + aurrpkgsColor.nc, "(" + repo["name"] + ")")
 
 
 # print summary if all is good
 if all_updated:
-    print("All AUR R packages of user", username, "are up-to-date")
+    print(aurrpkgsColor.ok + "[OK]" + aurrpkgsColor.nc, "All AUR R packages of user", aurrpkgsColor.data + username + aurrpkgsColor.nc, "are up-to-date")
 
 
 sys.exit(0)
