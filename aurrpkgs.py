@@ -132,7 +132,7 @@ except APIResponseError as err:
 
 
 # filter out any non-R packages
-pkglist = [i for i in response_json["results"] if i["Name"].startswith("r-")]
+pkglist = [i for i in response_json["results"] if i["Name"].startswith("r-") and not i["Name"].endswith("-git")]
 
 if len(pkglist) == 0:
     print(aurrpkgsColor.error + "[ERROR]" + aurrpkgsColor.nc, "There are no R packages for user", aurrpkgsColor.data + username + aurrpkgsColor.nc, "in AUR" + msg_exiting)
