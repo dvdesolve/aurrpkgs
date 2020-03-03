@@ -176,7 +176,7 @@ for i in range(pkg_num):
     print("Processing package "
           + APColor.data + str(i + 1) + APColor.nc + "/"
           + APColor.data + str(pkg_num) + APColor.nc + "...",
-          end="\r" if i < (pkg_num - 1) else " ")
+          end=("\r" if i < (pkg_num - 1) else " "))
 
     # leave only necessary keys
     pkglist[i] = {k: v for k, v in pkglist[i].items() if k in MANDATORY_KEYS}
