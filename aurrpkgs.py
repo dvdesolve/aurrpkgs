@@ -108,7 +108,7 @@ def check_updates(packages, total, finished, output):
             print("Processing package "
                   + APColor.data + str(finished.value) + APColor.nc + "/"
                   + APColor.data + str(total) + APColor.nc + "...",
-                  end=("\r" if finished.value <= (total - 1) else " "))
+                  end=("\r" if finished.value < total else " "))
 
 
         # leave only necessary keys
