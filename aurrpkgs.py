@@ -2,6 +2,7 @@
 
 """ Easy checking AUR R packages for updates """
 
+## import necessary modules
 import argparse
 import json
 import multiprocessing
@@ -12,6 +13,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import urlopen
 
 
+## helper classes
 class RequestError(Exception):
     """ handle non-ok network requests """
 
@@ -60,8 +62,8 @@ class APColor:
 class APMsg:
     """ messages """
 
-    skipping = ". " + APColor.yellow + "Skipping" + APColor.nc
-    exiting = ". " + APColor.red + "Exiting" + APColor.nc
+    skipping = ". {}Skipping{}".format(APColor.yellow, APColor.nc)
+    exiting = ". {}Exiting{}".format(APColor.red, APColor.nc)
 
 class APProgress:
     """ progress counter """
@@ -81,11 +83,12 @@ class APProgress:
     @property
     def value(self):
         """ return integer value """
+
         with self.lock:
             return self.val.value
 
 
-# some defaults
+## some defaults
 API_URL = "https://aur.archlinux.org/rpc/"
 API_VERSION = 5
 
@@ -109,135 +112,124 @@ SUPPORTED_REPOS = [
     }
 ]
 
-SCRIPT_VERSION = "0.1.5"
+SCRIPT_VERSION = "0.1.6"
 MANDATORY_KEYS = ["Name", "Version", "URL"]
 
 
-def check_updates(packages, total, finished, output):
-    """ check packages for updates """
+## helper functions
+def check_updates(package):
+    """ check updates for single package """
+
+    # leave only necessary keys
+    package = {k: v for k, v in package.items() if k in MANDATORY_KEYS}
+
+    # strip '-pkgrel' part and replace possible underscores with dots
+    package["Version"] = re.sub(r"_", ".", package["Version"].split('-', 1)[0])
+
+    # some repositories are not supported yet
+    domain = "{uri.netloc}".format(uri=urlparse(package["URL"])).lower()
+
+    if not any(r["url"] == domain for r in SUPPORTED_REPOS):
+        return "{}[WARN]{} Package {}{}{}: repository {}{}{} is unsupported (yet){}".format(
+            APColor.warn, APColor.nc,
+            APColor.data, package["Name"], APColor.nc,
+            APColor.data, domain, APColor.nc,
+            APMsg.skipping)
+
+    repo = next(r for r in SUPPORTED_REPOS if r["url"] == domain)
+
+    # get version info from repository
+    try:
+        with urlopen(package["URL"]) as response:
+            html = response.read().decode("utf-8")
+
+            table_regex = repo["table_regex"]
+            table_pattern = re.compile(table_regex, flags=re.DOTALL)
+            table_match = table_pattern.search(html)
+
+            if table_match:
+                # recheck
+                html = table_match.group(repo["table_match_index"])
+
+                version_regex = repo["version_regex"]
+                version_pattern = re.compile(version_regex, flags=re.DOTALL)
+                version_match = version_pattern.search(html)
+
+                if version_match:
+                    package["RepoVer"] = version_match.group(repo["version_match_index"])
+
+                    # make RepoVersion to conform with Arch standards
+                    # https://wiki.archlinux.org/index.php/R_package_guidelines
+                    package["RepoVersion"] = re.sub(r"[:-]", ".", package["RepoVer"])
+                else:
+                    raise RepoSearchError("can't find version info")
+            else:
+                raise RepoSearchError("can't find package info")
+
+    except HTTPError as err:
+        return "{}[WARN]{} Package {}{}{}: error while doing repository request: server returned {}{}{}{}".format(
+            APColor.warn, APColor.nc,
+            APColor.data, package["Name"], APColor.nc,
+            APColor.data, str(err.code), APColor.nc,
+            APMsg.skipping)
+
+    except URLError as err:
+        return "{}[WARN]{} Package {}{}{}: error while trying to connect to repository: {}{}{}{}".format(
+            APColor.warn, APColor.nc,
+            APColor.data, package["Name"], APColor.nc,
+            APColor.data, str(err.reason), APColor.nc,
+            APMsg.skipping)
+
+    except RequestError as err:
+        return "{}[WARN]{} Package {}{}{}: error while fetching request data from repository: {}{} {}{}{}".format(
+            APColor.warn, APColor.nc,
+            APColor.data, package["Name"], APColor.nc,
+            APColor.data, str(err.status), str(err.reason), APColor.nc,
+            APMsg.skipping)
+
+    except RepoSearchError as err:
+        return "{}[WARN]{} Package {}{}{}: error while processing repository response: {}{}{}{}".format(
+            APColor.warn, APColor.nc,
+            APColor.data, package["Name"], APColor.nc,
+            APColor.data, str(err.reason), APColor.nc,
+            APMsg.skipping)
+
+    # compare versions in field-by-field way
+    aurver = [int(x) for x in package["Version"].split(".")]
+    repover = [int(x) for x in package["RepoVersion"].split(".")]
+
+    if aurver < repover:
+        return "{}[INFO]{} Package {}{}{} is outdated: {}{}{} (AUR) vs {}{}{} ({})".format(
+            APColor.info, APColor.nc,
+            APColor.data, package["Name"], APColor.nc,
+            APColor.old, package["Version"], APColor.nc,
+            APColor.new, package["RepoVer"], APColor.nc, repo["name"])
+
+
+def checker_worker(packages, total, finished, output):
+    """ main worker function for parallel updates checking """
+
     for package in packages:
         # print current progress
         with finished.lock:
             finished.increment()
 
-            print("Processing package "
-                  + APColor.data + str(finished.value) + APColor.nc + "/"
-                  + APColor.data + str(total) + APColor.nc + "...",
+            print("{}[INFO]{} Processing package {}{}{}/{}{}{}...".format(
+                APColor.info, APColor.nc,
+                APColor.data, str(finished.value), APColor.nc,
+                APColor.data, str(total), APColor.nc),
                   end=("\r" if finished.value < total else " "))
 
+        # check package for updates
+        res = check_updates(package)
 
-        # leave only necessary keys
-        package = {k: v for k, v in package.items() if k in MANDATORY_KEYS}
-
-        # strip '-pkgrel' part and replace possible underscores with dots
-        package["Version"] = re.sub(r"_", ".", package["Version"].split('-', 1)[0])
-
-        # some repositories are not supported yet
-        domain = "{uri.netloc}".format(uri=urlparse(package["URL"])).lower()
-
-        if not any(r["url"] == domain for r in SUPPORTED_REPOS):
-            output.append(APColor.warn + "[WARN]" + APColor.nc +
-                          " Package " +
-                          APColor.data + package["Name"] + APColor.nc +
-                          ": repository " +
-                          APColor.data + domain + APColor.nc +
-                          " is unsupported (yet)" +
-                          APMsg.skipping)
-
-            continue
-
-        repo = next(r for r in SUPPORTED_REPOS if r["url"] == domain)
-
-        # get version info from repository
-        try:
-            with urlopen(package["URL"]) as response:
-                html = response.read().decode("utf-8")
-
-                table_regex = repo["table_regex"]
-                table_pattern = re.compile(table_regex, flags=re.DOTALL)
-                table_match = table_pattern.search(html)
-
-                if table_match:
-                    # recheck
-                    html = table_match.group(repo["table_match_index"])
-
-                    version_regex = repo["version_regex"]
-                    version_pattern = re.compile(version_regex, flags=re.DOTALL)
-                    version_match = version_pattern.search(html)
-
-                    if version_match:
-                        package["RepoVer"] = version_match.group(repo["version_match_index"])
-
-                        # make RepoVersion to conform with Arch standards
-                        # https://wiki.archlinux.org/index.php/R_package_guidelines
-                        package["RepoVersion"] = re.sub(r"[:-]", ".", package["RepoVer"])
-                    else:
-                        raise RepoSearchError("can't find version info")
-                else:
-                    raise RepoSearchError("can't find package info")
-
-        except HTTPError as err:
-            output.append(APColor.warn + "[WARN]" + APColor.nc +
-                          " Package " +
-                          APColor.data + package["Name"] + APColor.nc +
-                          ": error while doing repository request: server returned " +
-                          APColor.data + str(err.code) + APColor.nc +
-                          APMsg.skipping)
-            continue
-
-        except URLError as err:
-            output.append(APColor.warn + "[WARN]" + APColor.nc +
-                          " Package " +
-                          APColor.data + package["Name"] + APColor.nc +
-                          ": error while trying to connect to repository: " +
-                          APColor.data + str(err.reason) + APColor.nc +
-                          APMsg.skipping)
-            continue
-
-        except RequestError as err:
-            output.append(APColor.warn + "[WARN]" + APColor.nc +
-                          " Package " +
-                          APColor.data + package["Name"] + APColor.nc +
-                          ": error while fetching request data from repository: " +
-                          APColor.data + str(err.status) + " " + str(err.reason) + APColor.nc +
-                          APMsg.skipping)
-            continue
-
-        except RepoSearchError as err:
-            output.append(APColor.warn + "[WARN]" + APColor.nc +
-                          " Package " +
-                          APColor.data + package["Name"] + APColor.nc +
-                          ": error while processing repository response: " +
-                          APColor.data + str(err.reason) + APColor.nc +
-                          APMsg.skipping)
-            continue
-
-        aurver = [int(x) for x in package["Version"].split(".")]
-        repover = [int(x) for x in package["RepoVersion"].split(".")]
-
-        # compare versions in field-by-field way
-        if aurver < repover:
-            output.append(APColor.info + "[INFO]" + APColor.nc +
-                          " Package " +
-                          APColor.data + package["Name"] + APColor.nc +
-                          " is outdated: " +
-                          APColor.old + package["Version"] + APColor.nc +
-                          " (AUR) vs " +
-                          APColor.new + package["RepoVer"] + APColor.nc +
-                          " (" + repo["name"] + ")")
+        # store result (if any)
+        if res:
+            output.append(res)
 
 
-def main():
-    """ main routine """
-
-    # get command line options
-    parser = argparse.ArgumentParser(description="Tool for easy management of AUR R packages")
-    parser.add_argument("user", help="AUR username")
-    parser.add_argument("--version", action="version", version="%(prog)s " + SCRIPT_VERSION)
-    cmdline_args = vars(parser.parse_args())
-
-    username = cmdline_args["user"]
-
+def check_user(username):
+    """ check packages of specific user """
 
     # request for R packages
     query_params = {
@@ -258,57 +250,58 @@ def main():
             response_json = json.load(response)
 
             if response_json["type"] != "search":
-                raise APIRequestError("response type " +
-                                      APColor.data + response_json["type"] + APColor.nc +
-                                      " is invalid")
+                raise APIRequestError("response type {}{}{} is invalid".format(
+                    APColor.data, response_json["type"], APColor.nc))
 
             if response_json["resultcount"] == 0:
-                raise APIRequestError("there are no packages for user " +
-                                      APColor.data + username + APColor.nc +
-                                      " in AUR")
+                raise APIRequestError("there are no packages for user {}{}{} in AUR".format(
+                    APColor.data, username, APColor.nc))
 
     except HTTPError as err:
-        print(APColor.error + "[ERROR]" + APColor.nc,
-              "Error while doing AUR API request: server returned",
-              APColor.data + str(err.code) + APColor.nc + APMsg.exiting,
-              file=sys.stderr)
-        sys.exit(APError.server)
+        print("{}[ERROR]{} Error while doing AUR API request: server returned {}{}{}{}".format(
+            APColor.error, APColor.nc,
+            APColor.data, str(err.code), APColor.nc,
+            APMsg.skipping))
+
+        return
 
     except URLError as err:
-        print(APColor.error + "[ERROR]" + APColor.nc,
-              "Error while trying to connect to the AUR:",
-              APColor.data + str(err.reason) + APColor.nc + APMsg.exiting,
-              file=sys.stderr)
-        sys.exit(APError.network)
+        print("{}[ERROR]{} Error while trying to connect to the AUR: {}{}{}{}".format(
+            APColor.error, APColor.nc,
+            APColor.data, str(err.reason), APColor.nc,
+            APMsg.skipping))
+
+        return
 
     except RequestError as err:
-        print(APColor.error + "[ERROR]" + APColor.nc,
-              "Error while fetching request data: server returned",
-              APColor.data + str(err.status) + " " + str(err.reason) + APColor.nc + APMsg.exiting,
-              file=sys.stderr)
-        sys.exit(APError.request)
+        print("{}[ERROR]{} Error while fetching request data: server returned {}{} {}{}{}".format(
+            APColor.error, APColor.nc,
+            APColor.data, str(err.status), str(err.reason), APColor.nc,
+            APMsg.skipping))
+
+        return
 
     except APIRequestError as err:
-        print(APColor.error + "[ERROR]" + APColor.nc,
-              "Error while processing AUR API response:",
-              str(err.reason) + APMsg.exiting,
-              file=sys.stderr)
-        sys.exit(APError.api_request)
+        print("{}[ERROR]{} Error while processing AUR API response: {}{}".format(
+            APColor.error, APColor.nc,
+            str(err.reason),
+            APMsg.skipping))
+
+        return
 
 
     # filter out any non-R packages and VCS versions of R packages
     pkglist = [i for i in response_json["results"] if i["Name"].startswith("r-") and not i["Name"].endswith("-git")]
 
     if len(pkglist) == 0:
-        print(APColor.error + "[ERROR]" + APColor.nc,
-              "There are no R packages for user",
-              APColor.data + username + APColor.nc, "in AUR" + APMsg.exiting,
-              file=sys.stderr)
-        sys.exit(APError.no_pkgs)
+        print("{}[ERROR]{} There are no R packages for user {}{}{} in AUR{}".format(
+            APColor.error, APColor.nc,
+            APColor.data, username, APColor.nc,
+            APMsg.skipping))
 
+        return
 
     # we'll check for updates NOW!
-
     # use all available CPU cores
     num_proc = multiprocessing.cpu_count()
     mgr = multiprocessing.Manager()
@@ -330,26 +323,51 @@ def main():
         start_i = i * pkgs_per_proc
         end_i = ((i + 1) * pkgs_per_proc) if i != (num_proc - 1) else None
 
-        pool.apply_async(check_updates, (pkglist[start_i:end_i], pkg_total, finished, output_info))
+        pool.apply_async(checker_worker, (pkglist[start_i:end_i], pkg_total, finished, output_info))
 
     # wait for all guys
     pool.close()
     pool.join()
 
     # print summary
-    print(APColor.ok + "done" + APColor.nc)
+    print("{}done{}".format(APColor.ok, APColor.nc))
 
     if len(output_info) == 0:
-        print(APColor.ok + "[OK]" + APColor.nc,
-              "All AUR R packages of user",
-              APColor.data + username + APColor.nc,
-              "are up-to-date")
+        print("{}[OK]{} All AUR R packages of user {}{}{} are up-to-date".format(
+            APColor.ok, APColor.nc,
+            APColor.data, username, APColor.nc))
     else:
         for line in output_info:
             print(line)
 
 
-# main program starts here
+def main():
+    """ main routine """
+
+    # get command line options
+    parser = argparse.ArgumentParser(description="Tool for easy management of AUR R packages")
+    parser.add_argument("user", nargs='+', help="AUR username")
+    parser.add_argument("--version", action="version", version="%(prog)s " + SCRIPT_VERSION)
+    cmdline_args = vars(parser.parse_args())
+
+    usernames = cmdline_args["user"]
+
+    # perform updates checking for each user
+    for username in usernames:
+        print("{}[INFO]{} Checking R packages for user {}{}{}".format(
+            APColor.info, APColor.nc,
+            APColor.data, username, APColor.nc))
+
+        check_user(username)
+
+        print()
+
+    # final print
+    print("{}[OK]{} Job done".format(
+        APColor.ok, APColor.nc))
+
+
+## main program starts here
 if __name__ == "__main__":
     main()
 

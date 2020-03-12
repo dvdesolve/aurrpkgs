@@ -21,10 +21,10 @@ yay -S aurrpkgs-git
 ## Usage
 Simply run:
 ```
-./aurrpkgs.py user
+./aurrpkgs.py user [user1 user2 ...]
 ```
 or if you have installed version:
 ```
-aurrpkgs user
+aurrpkgs user [user1 user2 ...]
 ```
-where `user` is AUR username of interest.
+where `user`s are the AUR usernames of interest.
