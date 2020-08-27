@@ -302,10 +302,10 @@ def check_user(username):
         return
 
     # we'll check for updates NOW!
-    # use 3x all available CPU cores
-    # it's safe to oversubscribe because usual bottleneck is network
+    # use 2x all available CPU cores
+    # it's safe to oversubscribe because usual bottleneck is the network
     # connection
-    num_proc = multiprocessing.cpu_count() * 3
+    num_proc = multiprocessing.cpu_count() * 2
     mgr = multiprocessing.Manager()
     pool = multiprocessing.Pool(processes=num_proc)
 
